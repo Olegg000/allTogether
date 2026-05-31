@@ -1,0 +1,9 @@
+[submodule "web"]
+	path = web
+	url = git@github.com:Olegg000/autoCheckMobileReact.git
+[submodule "mobile"]
+	path = mobile
+	url = git@github.com:Olegg000/autoCheckMobileFlutter.git
+[submodule "backend"]
+	path = backend
+	url = git@github.com:Vrs-Alex/AutoCheckMobile.git

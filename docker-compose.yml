@@ -1,0 +1,128 @@
+name: autocheck
+
+services:
+  database:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: autocheck
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - autocheck-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d autocheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --loglevel warning --save 60 1
+    volumes:
+      - redis_data:/data
+    networks:
+      - autocheck-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  checker-runner:
+    build:
+      context: ./backend/Backend/auth-check
+      dockerfile: checker.Dockerfile
+    image: autocheck-checker:latest
+    command: ["/bin/sh", "-c", "echo 'Checker image ready'"]
+    restart: "no"
+    networks:
+      - autocheck-net
+
+  backend:
+    build:
+      context: ./backend/Backend/auth-check
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: api
+      DATABASE_URL: jdbc:postgresql://database:5432/autocheck
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-min-32-chars!!}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      LOGGING_LEVEL_COM_TEAM_AUTH_CHECK: DEBUG
+      LOGGING_PATTERN_CONSOLE: "%d{HH:mm:ss.SSS} %-5level [%logger{0}]: %msg%n"
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - autocheck-net
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend/Backend/auth-check
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    user: root
+    environment:
+      SPRING_PROFILES_ACTIVE: worker
+      DATABASE_URL: jdbc:postgresql://database:5432/autocheck
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-min-32-chars!!}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com}
+      DOCKER_UPLOADS_VOLUME: autocheck_uploads_data
+      CHECKER_IMAGE: autocheck-checker:latest
+      LOGGING_LEVEL_COM_TEAM_AUTH_CHECK: DEBUG
+      LOGGING_PATTERN_CONSOLE: "%d{HH:mm:ss.SSS} %-5level [%logger{0}]: %msg%n"
+    volumes:
+      - uploads_data:/app/uploads
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - autocheck-net
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      checker-runner:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api/v1
+        VITE_USE_MOCKS: "false"
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    networks:
+      - autocheck-net
+    depends_on:
+      - backend
+
+networks:
+  autocheck-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
